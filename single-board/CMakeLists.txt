@@ -17,7 +17,15 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+project(BTSNIFFER)
 cmake_minimum_required(VERSION 2.8)
+
+# gcc 11 for older version of ubuntu
+#set(CMAKE_C_COMPILER "/usr/bin/gcc-11")
+#set(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
+#set(CUDA_HOST_COMPILER "/usr/bin/g++-11")
+set(CMAKE_C_COMPILER "/usr/bin/gcc-13")
+set(CMAKE_CXX_COMPILER "/usr/bin/g++-13")
 
 list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
 
@@ -42,10 +50,14 @@ if(MSVC)
     endif(BOOST_ALL_DYN_LINK)
 endif(MSVC)
 find_package(Boost "1.46" REQUIRED ${BOOST_REQUIRED_COMPONENTS})
-find_package(UHD "3.9.7" EXACT REQUIRED)
+find_package(UHD  REQUIRED)
 
 ### Configure Compiler ########################################################
-set (CMAKE_CXX_STANDARD 11)
+# for older version of gcc or uhd
+#set (CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 include_directories(
     ${Boost_INCLUDE_DIRS}
@@ -57,7 +69,9 @@ link_directories(${Boost_LIBRARY_DIRS})
 add_executable(btsniffer btsniffer.cpp lapnode.cpp)
 
 SET(CMAKE_BUILD_TYPE "Release")
-
+# adding some optimisation flags
+set(CMAKE_CXX_FLAGS_RELEASE
+    "-O3 -march=native -mtune=native -ffast-math")
 # Shared library case: All we need to do is link against the library, and
 # anything else we need (in this case, some Boost libraries):
 if(NOT UHD_USE_STATIC_LIBS)

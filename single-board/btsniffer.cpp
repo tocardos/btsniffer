@@ -17,7 +17,7 @@
  */
 
 #include <uhd/utils/safe_main.hpp>
-#include <uhd/utils/thread_priority.hpp>
+#include <uhd/utils/thread.hpp>
 #include <uhd/types/tune_request.hpp>
 #include <uhd/usrp/multi_usrp.hpp>
 #include <boost/program_options.hpp>
@@ -36,10 +36,10 @@
 
 namespace po = boost::program_options;
 
-typedef std::complex<double> iqsamp_t;
+typedef std::complex<float> iqsamp_t;
 
 /*** Select number of channels ***/
-#define CHAN_8
+#define CHAN_16
 #include "btsniffer.hpp"
 
 const unsigned int decfactor = (int) raw_srate/srate;
@@ -244,7 +244,7 @@ void* proc_routine(void *routine_params)
   iqsamp_t *chanbuf = (iqsamp_t*) malloc(decfactor * bufsize * sizeof(iqsamp_t));
 
   // Make filter polyphase!
-  std::vector<std::vector<double>> poly(decfactor);
+  std::vector<std::vector<float>> poly(decfactor);
   size_t components_length = (size_t) ceil(FILTER_TAP_NUM/decfactor);
   for (size_t i = 0; i < components_length * decfactor; i++) {
 	  if (i < FILTER_TAP_NUM) poly[i%decfactor].push_back(filter_taps[i]);
@@ -252,15 +252,22 @@ void* proc_routine(void *routine_params)
   }
 
   // Create twiddle matrix.
-  std::complex<double> i_unit(0.0, 1.0);
+  std::complex<float> i_unit(0.0, 1.0);
   std::vector<std::vector<iqsamp_t>> twiddle(decfactor);
+  //for (size_t row = 0; row < decfactor; row++) {
+	//  for (size_t col = 0; col < decfactor; col++) {
+	//	  std::complex<float> tmp =
+	//		  exp(-i_unit * (float)2.0*(float)M_PI * ((float) col*row) / (float)decfactor);
+	//	  twiddle[row].push_back(tmp);
+	  //}
+  //}
   for (size_t row = 0; row < decfactor; row++) {
-	  for (size_t col = 0; col < decfactor; col++) {
-		  std::complex<double> tmp =
-			  exp(-i_unit * 2.0*M_PI * ((double) col*row) / (double)decfactor);
-		  twiddle[row].push_back(tmp);
-	  }
+      for (size_t col = 0; col < decfactor; col++) {
+          float phase = -2.0f * M_PI * (float)(col * row) / (float)decfactor;
+          twiddle[row].push_back(std::polar(1.0f, phase));
+      }
   }
+
 
   while(stopsig == false) {
     local_bufselect = bufselect;
@@ -275,13 +282,17 @@ void* proc_routine(void *routine_params)
 
     // Filtering
     memset(sigbuf, 0, decfactor * bufsize * sizeof(iqsamp_t));
-
+	//std::fill_n(sigbuf, decfactor * bufsize, iqsamp_t(0.0f, 0.0f));
+	// moving unlock here to allow overlapping of filtering and data acquisition
+    if (local_bufselect) pthread_spin_unlock(&lock[1]);
+    else pthread_spin_unlock(&lock[0]); 
+    
     for (size_t i = FILTER_TAP_NUM-1; i < bufsize*decfactor; i += decfactor) {
 	    for (size_t k = 0; k < components_length; k++) {
 		    size_t idx = i/decfactor;
-		    sigbuf[idx-1] += (curbuf[i-k*decfactor+0] * poly[0].at(k))/((double) components_length);
+		    sigbuf[idx-1] += (curbuf[i-k*decfactor+0] * poly[0].at(k))/((float) components_length);
 		    for (size_t ch = 1; ch < decfactor; ch++) {
-			    sigbuf[ch*bufsize + idx] += (curbuf[i-k*decfactor+(decfactor-ch)] * poly[ch].at(k)/((double) components_length-1));
+			    sigbuf[ch*bufsize + idx] += (curbuf[i-k*decfactor+(decfactor-ch)] * poly[ch].at(k)/((float) components_length-1));
 		    }
 	    }
     }
@@ -292,6 +303,8 @@ void* proc_routine(void *routine_params)
 
     // Channelize using DFT.
     memset(chanbuf, 0, decfactor * bufsize * sizeof(iqsamp_t));
+    //std::fill_n(chanbuf, decfactor * bufsize, iqsamp_t(0.0f, 0.0f));
+
     for (unsigned int i = 0; i < bufsize; i++) {
 	    for (size_t ch = 0; ch < decfactor; ch++)
 		    for (size_t k = 0; k < decfactor; k++)
@@ -554,7 +567,7 @@ void* proc_routine(void *routine_params)
 								    }
 							    }
 							    
-							    std::cout << boost::format("Only two UAP left (%d and %d) - ")
+							    std::cout << boost::format("Only two UAP left (%X and %X) - ")
 								    % uap_found[0] % uap_found[1];
 							    
 							    // Check that only 2 UAPs have been found.
@@ -576,7 +589,7 @@ void* proc_routine(void *routine_params)
                                 std::cout << boost::format("solved in %lld us")  % tsdiff << std::endl;
 
                                 fprintf(fptrout,
-                                    "%ld.%06ld %06X -- %3d %3d -- ts %lld -- tdiff %lld -- energy %lf\n",
+                                    "%ld.%06ld %06X -- %3X %3x -- ts %lld -- tdiff %lld -- energy %lf\n",
  								    ts.tv_sec, ts.tv_usec, _lap, uap_found[0], uap_found[1], tsresolv,
                                     tsdiff, energy);
  							    fflush (fptrout);
@@ -610,8 +623,8 @@ void* proc_routine(void *routine_params)
     
     
     // Release buffer.
-    if (local_bufselect) pthread_spin_unlock(&lock[1]);
-    else pthread_spin_unlock(&lock[0]); 
+    //if (local_bufselect) pthread_spin_unlock(&lock[1]);
+    //else pthread_spin_unlock(&lock[0]); 
   }
   
   free(chanbuf);
@@ -666,7 +679,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
 
   // Create a multi-USRP device.
   std::cout << "Creating USRP device..." << std::endl;
-  uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(args);
+  std::string enhanced_args = args + ",recv_buff_size=10000000"  +",num_recv_frames=512";
+  //uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(args);
+  uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(enhanced_args);
+
   std::cout << "USRP device created." << std::endl;
 
   // Select the RX subdevice first; this mapping affects all the settings.
@@ -713,20 +729,36 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
       throw std::runtime_error("Invalid channel(s) specified.");
     }
   }
-
+  const size_t nchannels = usrp->get_rx_num_channels();
+  
   // Create a receive streamer.
-  uhd::stream_args_t stream_args("fc64","sc16");
+  uhd::stream_args_t stream_args("fc32","sc16");
   stream_args.channels = channel_nums;
   uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
   // Allocate data buffers.
-  const double nseconds = 2.0;
+  const double nseconds = 0.2;
   const double bufsize_us = nseconds * rate;
   const size_t usrp_bufsize = rx_stream->get_max_num_samps();
   const size_t usrp_nbuffers = (size_t) ceil(bufsize_us / (float) usrp_bufsize);
-  std::vector<iqsamp_t> bankA(usrp_bufsize * usrp_nbuffers);
-  std::vector<iqsamp_t> bankB(usrp_bufsize * usrp_nbuffers);
-  iqsamp_t *bankptr;
+  //std::vector<iqsamp_t> bankA(usrp_bufsize * usrp_nbuffers);
+  //std::vector<iqsamp_t> bankB(usrp_bufsize * usrp_nbuffers);
+  //iqsamp_t *bankptr;
+  std::vector<iqsamp_t> bankA_ch0(usrp_bufsize * usrp_nbuffers);
+  std::vector<iqsamp_t> bankB_ch0(usrp_bufsize * usrp_nbuffers);
+
+  // RX1 banks only used if nchannels == 2
+  std::vector<iqsamp_t> bankA_ch1;
+  std::vector<iqsamp_t> bankB_ch1;
+
+  if (nchannels == 2) {
+    bankA_ch1.resize(usrp_bufsize * usrp_nbuffers);
+    bankB_ch1.resize(usrp_bufsize * usrp_nbuffers);
+  }
+
+  // Active bank pointers
+  iqsamp_t *bankptr_ch0;
+  iqsamp_t *bankptr_ch1 = nullptr;
 
   // Auxiliary data for recv().
   uhd::rx_metadata_t md;
@@ -747,7 +779,9 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
 
   // Create thread for processing data.
   pthread_t proc_thread;
-  proc_pars_t proc_pars = {&bankA.front(), &bankB.front(), usrp_bufsize/decfactor * usrp_nbuffers};
+  //proc_pars_t proc_pars = {&bankA.front(), &bankB.front(), usrp_bufsize/decfactor * usrp_nbuffers};
+  
+	proc_pars_t proc_pars = {&bankA_ch0.front(), &bankB_ch0.front(), usrp_bufsize/decfactor * usrp_nbuffers};
   pthread_create(&proc_thread, NULL, proc_routine, &proc_pars);
 
   std::signal(SIGINT, &sigint_handler);
@@ -765,15 +799,21 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
     pthread_spin_lock(&lock[bufselect]);
     
     // Claim buffer for writing.
+    //if (bufselect) {
+    //  bankptr = &bankA.front();
+    //} else {
+    //  bankptr = &bankB.front();
+    //}
     if (bufselect) {
-      bankptr = &bankA.front();
+      bankptr_ch0 = &bankA_ch0.front();
     } else {
-      bankptr = &bankB.front();
+      bankptr_ch0 = &bankB_ch0.front();
     }
       
     // Receive data.
     for (unsigned int n = 0; n < usrp_nbuffers; n++) {
-      num_rx_samps = rx_stream->recv(bankptr + usrp_bufsize*n, usrp_bufsize, md, timeout, false);
+      //num_rx_samps = rx_stream->recv(bankptr + usrp_bufsize*n, usrp_bufsize, md, timeout, false);
+      num_rx_samps = rx_stream->recv(bankptr_ch0 + usrp_bufsize*n, usrp_bufsize, md, timeout, false);
       
       // Throw an exception on error.
       if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) {
