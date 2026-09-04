@@ -29,6 +29,8 @@ typedef enum {
     LAP_STATE_NEW = 0,
     LAP_STATE_BRUTE_FORCING = 1,
     LAP_STATE_RESOLVED = 2,
+	LAP_STATE_LOCKED = 3,
+	LAP_STATE_UAP_LOCKED = 4,
 } lap_status_t;
 
 
@@ -46,6 +48,7 @@ public:
 	void set_status(lap_status_t);
 	void set_uap_data(int index, bool valid, uint32_t uap, uint32_t clk1, uint32_t clk2, int clk_index);
 	void get_uap_data(int index, bool *valid, uint32_t *uap, uint32_t *clk1, uint32_t *clk2, int *clk_index);
+	bool get_uap_data_by_uap( uint32_t uap, uint32_t *clk1, uint32_t *clk2, int *clk_index);
 	void set_ts(long long);
 	long long get_ts();
 	void increase_processed_packets (void);
@@ -62,6 +65,24 @@ public:
 	int get_broken_uap (void);
 	void count_packet_inthepast (void);
 	int get_packet_inthepast (void);
+	// === VDE to keep UAPs ===
+    bool two_uap_stage = false;
+    bool uap_locked    = false;
+	int set_clk_index = 0;
+    uint8_t uap_pair[2] = {0, 0};
+    uint8_t locked_uap  = 0;
+	uint32_t last_clk=0;      // Last known CLK value
+    int clk_idx=-1;            // Which CLK index (0 or 1) was valid
+	// Optional: stats
+    uint32_t pdu_ok = 0;
+    uint32_t pdu_fail = 0;
+	// signal metric
+    double last_rssi = 0.0f;
+    double last_snr = 0.0f;
+    double avg_rssi = 0.0f;
+    double avg_snr = 0.0f;
+
+	// ========================
 private:
 	lap_status_t state;
 	uint32_t lap;

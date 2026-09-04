@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bluetooth Monitor</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #0a0e27;
+  color: #e0e0e0;
+  padding: 10px;
+}
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+h1 {
+  text-align: center;
+  color: #00d4ff;
+  margin-bottom: 20px;
+  font-size: clamp(20px, 5vw, 28px);
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+h2 {
+  color: #00d4ff;
+  margin-bottom: 15px;
+  font-size: clamp(14px, 3vw, 18px);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Channel Spectrum Section */
+.spectrum-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 15px;
+  margin-bottom: 15px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.spectrum-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+#rssi-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 200px;
+  font-size: 10px;
+  color: #6b7280;
+  font-family: 'Courier New', monospace;
+  padding-right: 8px;
+  border-right: 1px solid #2a3f5f;
+}
+
+.scale-item {
+  position: relative;
+  text-align: right;
+}
+
+.scale-item::after {
+  content: '';
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  width: 4px;
+  height: 1px;
+  background: #2a3f5f;
+}
+
+#channels {
+  display: flex;
+  gap: 1px;
+  flex: 1;
+  align-items: flex-end;
+  height: 200px;
+  padding: 10px 5px 25px 5px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  position: relative;
+  overflow-x: auto;
+}
+
+#channels::before {
+  content: 'Channel';
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.channel {
+  flex: 1;
+  min-width: 6px;
+  max-width: 25px;
+  height: 100%;
+  background: #0f1729;
+  position: relative;
+  border-radius: 2px 2px 0 0;
+  transition: all 0.1s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.channel:hover {
+  background: #1a2238;
+}
+
+.channel-label {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  color: #6b7280;
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+}
+
+.bar {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.2s ease, background 0.2s ease;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Bottom Section */
+.bottom-section {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 15px;
+}
+
+/* Devices Table */
+.devices-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  overflow-x: auto;
+}
+
+#lap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+
+#lap-table th {
+  background: #0f1729;
+  padding: 10px 8px;
+  text-align: left;
+  color: #00d4ff;
+  font-weight: 600;
+  border-bottom: 2px solid #00d4ff;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+#lap-table td {
+  padding: 8px;
+  border-bottom: 1px solid #2a3f5f;
+}
+
+#lap-table tr {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#lap-table tr:hover {
+  background: rgba(0, 212, 255, 0.1);
+}
+
+#lap-table tr.selected {
+  background: rgba(0, 212, 255, 0.2);
+  box-shadow: inset 0 0 0 2px rgba(0, 212, 255, 0.5);
+}
+
+tr.active {
+  animation: pulse 0.5s ease;
+}
+
+@keyframes pulse {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(0, 212, 255, 0.3); }
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Courier New', monospace;
+  transition: all 0.2s ease;
+}
+
+.btn-ping {
+  background: #00d4ff;
+  color: #0a0e27;
+  font-weight: 600;
+}
+
+.btn-ping:hover {
+  background: #00b8e6;
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+.btn-ping:disabled {
+  background: #2a3f5f;
+  color: #6b7280;
+  cursor: not-allowed;
+}
+
+/* RSSI Gauge */
+.gauge-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.gauge-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  justify-content: center;
+}
+
+#rssi-gauge {
+  position: relative;
+  width: 60px;
+  height: 200px;
+  border: 2px solid #2a3f5f;
+  background: linear-gradient(to top, 
+    #1a0000 0%, 
+    #330000 20%, 
+    #443300 40%, 
+    #334400 60%, 
+    #003300 80%, 
+    #004400 100%);
+  border-radius: 30px;
+  overflow: hidden;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+#rssi-needle {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  background: #ffeb3b;
+  box-shadow: 
+    0 0 10px #ffeb3b,
+    0 0 20px #ffeb3b,
+    0 -2px 0 #fff;
+  transition: bottom 0.3s ease;
+}
+
+.gauge-info-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#rssi-label {
+  font-family: 'Courier New', monospace;
+  color: #00d4ff;
+  font-size: 24px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+.gauge-info {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* L2Ping Modal */
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(5px);
+}
+
+.modal.show {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 90%;
+  width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  border: 2px solid #2a3f5f;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-50px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #2a3f5f;
+}
+
+.modal-header h3 {
+  color: #00d4ff;
+  font-size: 18px;
+  margin: 0;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 28px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #00d4ff;
+}
+
+#ping-output {
+  background: #0a0e27;
+  border: 1px solid #2a3f5f;
+  border-radius: 8px;
+  padding: 15px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: #e0e0e0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow-y: auto;
+  min-height: 100px;
+}
+
+.ping-status {
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  font-size: 13px;
+}
+
+.ping-status.running {
+  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  color: #00d4ff;
+}
+
+.ping-status.error {
+  background: rgba(255, 82, 82, 0.1);
+  border: 1px solid rgba(255, 82, 82, 0.3);
+  color: #ff5252;
+}
+
+.ping-status.success {
+  background: rgba(76, 175, 80, 0.1);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  color: #4caf50;
+}
+
+/* Responsive */
+@media (min-width: 768px) {
+  .spectrum-section {
+    padding: 25px;
+  }
+  
+  .devices-section {
+    padding: 25px;
+  }
+  
+  .gauge-section {
+    padding: 25px;
+  }
+  
+  #rssi-scale {
+    height: 250px;
+    font-size: 11px;
+  }
+  
+  #channels {
+    height: 250px;
+    gap: 2px;
+  }
+  
+  .channel {
+    min-width: 8px;
+  }
+  
+  .channel-label {
+    font-size: 9px;
+  }
+  
+  #lap-table {
+    font-size: 13px;
+  }
+  
+  #lap-table th {
+    font-size: 11px;
+    padding: 12px;
+  }
+  
+  #lap-table td {
+    padding: 10px 12px;
+  }
+  
+  #rssi-gauge {
+    width: 80px;
+    height: 250px;
+  }
+}
+
+@media (min-width: 1024px) {
+  body {
+    padding: 20px;
+  }
+  
+  h1 {
+    margin-bottom: 30px;
+  }
+  
+  .spectrum-section {
+    margin-bottom: 25px;
+  }
+  
+  .bottom-section {
+    grid-template-columns: 1fr auto;
+    gap: 25px;
+  }
+  
+  .gauge-container {
+    flex-direction: column;
+    gap: 15px;
+  }
+  
+  .gauge-section {
+    min-width: 250px;
+  }
+  
+  #rssi-label {
+    font-size: 20px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>⚡ Bluetooth Channel Monitor</h1>
+  
+  <div class="spectrum-section">
+    <h2>Channel Spectrum (0-39)</h2>
+    <div class="spectrum-container">
+      <div id="rssi-scale">
+        <div class="scale-item">-20</div>
+        <div class="scale-item">-40</div>
+        <div class="scale-item">-60</div>
+        <div class="scale-item">-80</div>
+        <div class="scale-item">-100</div>
+      </div>
+      <div id="channels"></div>
+    </div>
+  </div>
+  
+  <div class="bottom-section">
+    <div class="devices-section">
+      <h2>Discovered Devices</h2>
+      <table id="lap-table">
+        <thead>
+          <tr>
+            <th>LAP</th>
+            <th>UAP</th>
+            <th>RSSI</th>
+            <th>Packets</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    
+    <div class="gauge-section">
+      <h2>RSSI Monitor</h2>
+      <div class="gauge-container">
+        <div id="rssi-gauge">
+          <div id="rssi-needle"></div>
+        </div>
+        <div class="gauge-info-box">
+          <div id="rssi-label">---</div>
+          <div class="gauge-info">Select a device to monitor</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- L2Ping Modal -->
+<div id="ping-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>L2Ping: <span id="ping-device"></span></h3>
+      <button class="close-btn" onclick="closePingModal()">&times;</button>
+    </div>
+    <div id="ping-status"></div>
+    <div id="ping-output">Initiating L2Ping...</div>
+  </div>
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const laps = {};
+const channels = [];
+const channelState = Array(40).fill(null);
+let selectedLap = null;
+let selectedUap = null;
+let lastRssiUpdate = 0;
+let currentRssi = -100;
+let rssiDecayInterval = null;
+
+const chanDiv = document.getElementById("channels");
+for (let i = 0; i < 40; i++) {
+  const d = document.createElement("div");
+  d.className = "channel";
+  d.title = `Channel ${i}`;
+  
+  const label = document.createElement("div");
+  label.className = "channel-label";
+  label.textContent = i;
+  d.appendChild(label);
+  
+  chanDiv.appendChild(d);
+  channels.push(d);
+}
+
+const RSSI_MIN = -100;
+const RSSI_MAX = -20;
+
+function rssiToPercent(rssi) {
+  rssi = Math.max(RSSI_MIN, Math.min(RSSI_MAX, rssi));
+  return ((rssi - RSSI_MIN) / (RSSI_MAX - RSSI_MIN)) * 100;
+}
+
+function deviceColor(lap, uap) {
+  const key = ((lap & 0xFFFFFF) << 8) | (uap & 0xFF);
+  const hue = (key * 53) % 360;
+  return `hsl(${hue}, 85%, 55%)`;
+}
+
+function formatUAP(uap) {
+  if (uap === 0xFF) return "??";
+  return "0x" + uap.toString(16).toUpperCase().padStart(2, "0");
+}
+
+function formatLAP(lap) {
+  return lap.toString(16).toUpperCase().padStart(6, "0");
+}
+
+ws.onmessage = ev => {
+  const msg = JSON.parse(ev.data);
+
+  if (msg.type === "init") {
+    msg.laps.forEach(updateLap);
+  }
+
+  if (msg.type === "packet") {
+    updateLap(msg);
+    updateChannel(msg);
+    if (selectedLap === msg.lap && selectedUap === msg.uap) {
+      updateRssiGauge(msg.rssi);
+    }
+  }
+  
+  if (msg.type === "ping_output") {
+    appendPingOutput(msg.data);
+  }
+  
+  if (msg.type === "ping_complete") {
+    updatePingStatus(msg.success ? 'success' : 'error', 
+                     msg.success ? 'L2Ping completed' : 'L2Ping failed');
+  }
+};
+
+function updateRssiGauge(rssi) {
+  currentRssi = rssi;
+  lastRssiUpdate = Date.now();
+  
+  const percent = rssiToPercent(rssi);
+  const needle = document.getElementById("rssi-needle");
+  const label = document.getElementById("rssi-label");
+
+  needle.style.bottom = `${percent}%`;
+  label.textContent = `${rssi} dBm`;
+  
+  if (rssiDecayInterval) {
+    clearInterval(rssiDecayInterval);
+  }
+  
+  rssiDecayInterval = setInterval(() => {
+    const elapsed = Date.now() - lastRssiUpdate;
+    if (elapsed > 3000) {
+      const decayTime = elapsed - 3000;
+      const decayRate = 80 / 5000;
+      currentRssi = Math.max(-100, rssi - (decayTime * decayRate));
+      
+      const percent = rssiToPercent(currentRssi);
+      needle.style.bottom = `${percent}%`;
+      label.textContent = `${Math.round(currentRssi)} dBm`;
+      
+      if (currentRssi <= -100) {
+        clearInterval(rssiDecayInterval);
+      }
+    }
+  }, 100);
+}
+
+function selectLap(lap) {
+  const dev = laps[lap];
+  if (!dev) return;
+
+  selectedLap = dev.lap;
+  selectedUap = dev.uap;
+
+  document.querySelectorAll('#lap-table tr').forEach(row => {
+    row.classList.remove('selected');
+  });
+  document.getElementById("lap-" + lap)?.classList.add('selected');
+  
+  document.getElementById("rssi-label").textContent = "Waiting...";
+  
+  if (rssiDecayInterval) {
+    clearInterval(rssiDecayInterval);
+  }
+}
+
+function startL2Ping(lap, uap) {
+  const lapStr = formatLAP(lap);
+  const uapStr = formatUAP(uap);
+  
+  document.getElementById('ping-device').textContent = `${lapStr}:${uapStr}`;
+  document.getElementById('ping-output').textContent = 'Initiating L2Ping...';
+  updatePingStatus('running', 'Running L2Ping...');
+  
+  document.getElementById('ping-modal').classList.add('show');
+  
+  fetch('/l2ping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lap: lap, uap: uap })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      updatePingStatus('error', data.message || 'Failed to start L2Ping');
+    }
+  })
+  .catch(error => {
+    updatePingStatus('error', 'Error: ' + error.message);
+  });
+}
+
+function closePingModal() {
+  document.getElementById('ping-modal').classList.remove('show');
+}
+
+function updatePingStatus(type, message) {
+  const statusDiv = document.getElementById('ping-status');
+  statusDiv.className = `ping-status ${type}`;
+  statusDiv.textContent = message;
+}
+
+function appendPingOutput(data) {
+  const output = document.getElementById('ping-output');
+  output.textContent += data;
+  output.scrollTop = output.scrollHeight;
+}
+
+function updateLap(msg) {
+  laps[msg.lap] = msg;
+
+  let row = document.getElementById("lap-" + msg.lap);
+  const rowColor = deviceColor(msg.lap, msg.uap);
+
+  if (!row) {
+    row = document.createElement("tr");
+    row.id = "lap-" + msg.lap;
+    row.onclick = () => selectLap(msg.lap);
+    row.style.color = rowColor;
+    
+    const tbody = document.querySelector('#lap-table tbody');
+    tbody.appendChild(row);
+  }
+
+  row.classList.add("active");
+  setTimeout(() => row.classList.remove("active"), 500);
+
+  const canPing = msg.uap !== 0xFF;
+  
+  row.innerHTML = `
+    <td>${formatLAP(msg.lap)}</td>
+    <td>${formatUAP(msg.uap)}</td>
+    <td>${msg.rssi} dBm</td>
+    <td>${msg.count}</td>
+    <td class="action-buttons">
+      <button class="btn btn-ping" 
+              onclick="event.stopPropagation(); startL2Ping(${msg.lap}, ${msg.uap})"
+              ${canPing ? '' : 'disabled'}>
+        Ping
+      </button>
+    </td>`;
+}
+
+function renderChannels() {
+  const now = Date.now();
+
+  for (let ch = 0; ch < 40; ch++) {
+    const c = channels[ch];
+    const existingBar = c.querySelector('.bar');
+    if (existingBar) {
+      existingBar.remove();
+    }
+
+    const s = channelState[ch];
+    if (!s) continue;
+
+    if (now - s.time > 1500) {
+      channelState[ch] = null;
+      continue;
+    }
+
+    const b = document.createElement("div");
+    b.className = "bar";
+    b.style.height = `${rssiToPercent(s.rssi)}%`;
+    b.style.background = deviceColor(s.lap, s.uap);
+    c.appendChild(b);
+  }
+}
+
+setInterval(renderChannels, 100);
+
+function updateChannel(msg) {
+  channelState[msg.channel] = {
+    rssi: msg.rssi,
+    lap: msg.lap,
+    uap: msg.uap,
+    time: Date.now()
+  };
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closePingModal();
+  }
+});
+
+// Close modal on background click
+document.getElementById('ping-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'ping-modal') {
+    closePingModal();
+  }
+});
+</script>
+</body>
+</html>

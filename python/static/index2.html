@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bluetooth Monitor</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #0a0e27;
+  color: #e0e0e0;
+  padding: 20px;
+}
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+h1 {
+  text-align: center;
+  color: #00d4ff;
+  margin-bottom: 30px;
+  font-size: 28px;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+h2 {
+  color: #00d4ff;
+  margin-bottom: 15px;
+  font-size: 18px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Channel Spectrum Section */
+.spectrum-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 25px;
+  margin-bottom: 25px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.spectrum-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 15px;
+}
+
+#rssi-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 250px;
+  font-size: 11px;
+  color: #6b7280;
+  font-family: 'Courier New', monospace;
+  padding-right: 10px;
+  border-right: 1px solid #2a3f5f;
+}
+
+.scale-item {
+  position: relative;
+  text-align: right;
+}
+
+.scale-item::after {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  width: 5px;
+  height: 1px;
+  background: #2a3f5f;
+}
+
+#channels {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  align-items: flex-end;
+  height: 250px;
+  padding: 10px 10px 25px 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  position: relative;
+}
+
+#channels::before {
+  content: 'Channel';
+  position: absolute;
+  bottom: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.channel {
+  flex: 1;
+  min-width: 8px;
+  max-width: 25px;
+  height: 100%;
+  background: #0f1729;
+  position: relative;
+  border-radius: 2px 2px 0 0;
+  transition: all 0.1s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.channel:hover {
+  background: #1a2238;
+}
+
+.channel-label {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #6b7280;
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
+}
+
+.bar {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.2s ease, background 0.2s ease;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Bottom Section */
+.bottom-section {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 25px;
+}
+
+/* Devices Table */
+.devices-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 25px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+#lap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+#lap-table th {
+  background: #0f1729;
+  padding: 12px;
+  text-align: left;
+  color: #00d4ff;
+  font-weight: 600;
+  border-bottom: 2px solid #00d4ff;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+#lap-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #2a3f5f;
+}
+
+#lap-table tr {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#lap-table tr:hover {
+  background: rgba(0, 212, 255, 0.1);
+}
+
+#lap-table tr.selected {
+  background: rgba(0, 212, 255, 0.2);
+  box-shadow: inset 0 0 0 2px rgba(0, 212, 255, 0.5);
+}
+
+tr.active {
+  animation: pulse 0.5s ease;
+}
+
+@keyframes pulse {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(0, 212, 255, 0.3); }
+}
+
+/* RSSI Gauge */
+.gauge-section {
+  background: #1a1f3a;
+  border-radius: 12px;
+  padding: 25px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 250px;
+}
+
+.gauge-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+#rssi-gauge {
+  position: relative;
+  width: 80px;
+  height: 250px;
+  border: 2px solid #2a3f5f;
+  background: linear-gradient(to top, 
+    #1a0000 0%, 
+    #330000 20%, 
+    #443300 40%, 
+    #334400 60%, 
+    #003300 80%, 
+    #004400 100%);
+  border-radius: 40px;
+  overflow: hidden;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+#rssi-needle {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  background: #ffeb3b;
+  box-shadow: 
+    0 0 10px #ffeb3b,
+    0 0 20px #ffeb3b,
+    0 -2px 0 #fff;
+  transition: bottom 0.3s ease;
+}
+
+#rssi-label {
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  color: #00d4ff;
+  font-size: 20px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+  min-height: 30px;
+}
+
+.gauge-info {
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 10px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .bottom-section {
+    grid-template-columns: 1fr;
+  }
+  
+  .gauge-section {
+    min-width: auto;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>⚡ Bluetooth Channel Monitor</h1>
+  
+  <div class="spectrum-section">
+    <h2>Channel Spectrum (0-39)</h2>
+    <div class="spectrum-container">
+      <div id="rssi-scale">
+        <div class="scale-item">-20</div>
+        <div class="scale-item">-40</div>
+        <div class="scale-item">-60</div>
+        <div class="scale-item">-80</div>
+        <div class="scale-item">-100</div>
+      </div>
+      <div id="channels"></div>
+    </div>
+  </div>
+  
+  <div class="bottom-section">
+    <div class="devices-section">
+      <h2>Discovered Devices</h2>
+      <table id="lap-table">
+        <thead>
+          <tr>
+            <th>LAP</th>
+            <th>UAP</th>
+            <th>RSSI</th>
+            <th>Packets</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    
+    <div class="gauge-section">
+      <h2>RSSI Monitor</h2>
+      <div class="gauge-container">
+        <div id="rssi-gauge">
+          <div id="rssi-needle"></div>
+        </div>
+        <div id="rssi-label">---</div>
+        <div class="gauge-info">Select a device to monitor</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const laps = {};
+const channels = [];
+const channelState = Array(40).fill(null);
+let selectedLap = null;
+let selectedUap = null;
+let lastRssiUpdate = 0;
+let currentRssi = -100;
+let rssiDecayInterval = null;
+
+const chanDiv = document.getElementById("channels");
+for (let i = 0; i < 40; i++) {
+  const d = document.createElement("div");
+  d.className = "channel";
+  d.title = `Channel ${i}`;
+  
+  const label = document.createElement("div");
+  label.className = "channel-label";
+  label.textContent = i;
+  d.appendChild(label);
+  
+  chanDiv.appendChild(d);
+  channels.push(d);
+}
+
+const RSSI_MIN = -100;
+const RSSI_MAX = -20;
+
+function rssiToPercent(rssi) {
+  rssi = Math.max(RSSI_MIN, Math.min(RSSI_MAX, rssi));
+  return ((rssi - RSSI_MIN) / (RSSI_MAX - RSSI_MIN)) * 100;
+}
+
+function deviceColor(lap, uap) {
+  const key = ((lap & 0xFFFFFF) << 8) | (uap & 0xFF);
+  const hue = (key * 53) % 360;
+  return `hsl(${hue}, 85%, 55%)`;
+}
+
+function formatUAP(uap) {
+  if (uap === 0xFF) return "??";
+  return "0x" + uap.toString(16).toUpperCase().padStart(2, "0");
+}
+
+ws.onmessage = ev => {
+  const msg = JSON.parse(ev.data);
+
+  if (msg.type === "init") {
+    msg.laps.forEach(updateLap);
+  }
+
+  if (msg.type === "packet") {
+    updateLap(msg);
+    updateChannel(msg);
+    if (selectedLap === msg.lap && selectedUap === msg.uap) {
+      updateRssiGauge(msg.rssi);
+    }
+  }
+};
+
+function updateRssiGauge(rssi) {
+  currentRssi = rssi;
+  lastRssiUpdate = Date.now();
+  
+  const percent = rssiToPercent(rssi);
+  const needle = document.getElementById("rssi-needle");
+  const label = document.getElementById("rssi-label");
+
+  needle.style.bottom = `${percent}%`;
+  label.textContent = `${rssi} dBm`;
+  
+  // Clear and restart decay interval
+  if (rssiDecayInterval) {
+    clearInterval(rssiDecayInterval);
+  }
+  
+  rssiDecayInterval = setInterval(() => {
+    const elapsed = Date.now() - lastRssiUpdate;
+    if (elapsed > 3000) {
+      const decayTime = elapsed - 3000;
+      const decayRate = 80 / 5000; // Decay to -100 over 5 seconds
+      currentRssi = Math.max(-100, rssi - (decayTime * decayRate));
+      
+      const percent = rssiToPercent(currentRssi);
+      needle.style.bottom = `${percent}%`;
+      label.textContent = `${Math.round(currentRssi)} dBm`;
+      
+      if (currentRssi <= -100) {
+        clearInterval(rssiDecayInterval);
+      }
+    }
+  }, 100);
+}
+
+function selectLap(lap) {
+  const dev = laps[lap];
+  if (!dev) return;
+
+  selectedLap = dev.lap;
+  selectedUap = dev.uap;
+
+  // Update UI to show selection
+  document.querySelectorAll('#lap-table tr').forEach(row => {
+    row.classList.remove('selected');
+  });
+  document.getElementById("lap-" + lap)?.classList.add('selected');
+  
+  document.getElementById("rssi-label").textContent = "Waiting...";
+  
+  // Reset gauge
+  if (rssiDecayInterval) {
+    clearInterval(rssiDecayInterval);
+  }
+}
+
+function updateLap(msg) {
+  laps[msg.lap] = msg;
+
+  let row = document.getElementById("lap-" + msg.lap);
+  const rowColor = deviceColor(msg.lap, msg.uap);
+
+  if (!row) {
+    row = document.createElement("tr");
+    row.id = "lap-" + msg.lap;
+    row.onclick = () => selectLap(msg.lap);
+    row.style.color = rowColor;
+    
+    const tbody = document.querySelector('#lap-table tbody');
+    tbody.appendChild(row);
+  }
+
+  row.classList.add("active");
+  setTimeout(() => row.classList.remove("active"), 500);
+
+  row.innerHTML = `
+    <td>${msg.lap.toString(16).toUpperCase().padStart(6, "0")}</td>
+    <td>${formatUAP(msg.uap)}</td>
+    <td>${msg.rssi} dBm</td>
+    <td>${msg.count}</td>`;
+}
+
+function renderChannels() {
+  const now = Date.now();
+
+  for (let ch = 0; ch < 40; ch++) {
+    const c = channels[ch];
+    // Clear only the bar, keep the label
+    const existingBar = c.querySelector('.bar');
+    if (existingBar) {
+      existingBar.remove();
+    }
+
+    const s = channelState[ch];
+    if (!s) continue;
+
+    if (now - s.time > 1500) {
+      channelState[ch] = null;
+      continue;
+    }
+
+    const b = document.createElement("div");
+    b.className = "bar";
+    b.style.height = `${rssiToPercent(s.rssi)}%`;
+    b.style.background = deviceColor(s.lap, s.uap);
+    c.appendChild(b);
+  }
+}
+
+setInterval(renderChannels, 100);
+
+function updateChannel(msg) {
+  channelState[msg.channel] = {
+    rssi: msg.rssi,
+    lap: msg.lap,
+    uap: msg.uap,
+    time: Date.now()
+  };
+}
+</script>
+</body>
+</html>

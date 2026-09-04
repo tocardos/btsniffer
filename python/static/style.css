@@ -1,0 +1,55 @@
+body {
+  font-family: sans-serif;
+}
+
+#channels {
+  display: flex;
+}
+
+.channel {
+  width: 10px;
+  height: 100px;
+  background: #222;
+  margin: 1px;
+  position: relative;
+}
+
+.bar {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+}
+#rssi-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 200px;
+  font-size: 12px;
+  color: #aaa;
+}
+tr.active {
+  font-weight: bold;
+}
+#rssi-gauge {
+  position: relative;
+  width: 60px;
+  height: 200px;
+  border: 1px solid #444;
+  background: linear-gradient(to top, #200, #420, #060);
+  margin: 10px;
+}
+
+#rssi-needle {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: yellow;
+}
+
+#rssi-label {
+  text-align: center;
+  font-family: monospace;
+  color: #fff;
+  margin-top: 5px;
+}

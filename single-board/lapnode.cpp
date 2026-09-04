@@ -40,6 +40,17 @@ lap_node::lap_node()
 	packet_too_close_notconfirmed = 0;
 	broken_uap = 0;
 	packet_inthepast = 0;
+	two_uap_stage = false;
+    uap_locked=false;
+    locked_uap=0;
+	last_clk=0; 
+    clk_idx=-1;
+    pdu_ok=0;
+    pdu_fail=0;
+	last_rssi = 0.0f;
+    last_snr = 0.0f;
+    avg_rssi = 0.0f;
+    avg_snr = 0.0f;
 }
 
 lap_node::lap_node(uint32_t _lap): lap_node()
@@ -85,6 +96,21 @@ void lap_node::get_uap_data(int index, bool *_valid, uint32_t *_uap,
 	*_clk1 = uaps[index].clk1;
 	*_clk2 = uaps[index].clk2;
 	*_clk_index = uaps[index].clk_index;
+}
+
+// vde added
+bool lap_node::get_uap_data_by_uap( uint32_t uap,uint32_t *_clk1, uint32_t *_clk2, int *_clk_index)
+{
+	for (int index=0; index<32; index++) {
+		if (uaps[index].uap == uap) {
+			*_clk1 = uaps[index].clk1;
+			*_clk2 = uaps[index].clk2;
+			*_clk_index = uaps[index].clk_index;
+			return true;
+		}
+	}
+	return false;
+	
 }
 
 void lap_node::set_ts(long long _ts)

@@ -21,11 +21,12 @@ project(BTSNIFFER)
 cmake_minimum_required(VERSION 2.8)
 
 # gcc 11 for older version of ubuntu
-#set(CMAKE_C_COMPILER "/usr/bin/gcc-11")
-#set(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
+set(CMAKE_C_COMPILER "/usr/bin/gcc-11")
+set(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
 #set(CUDA_HOST_COMPILER "/usr/bin/g++-11")
-set(CMAKE_C_COMPILER "/usr/bin/gcc-13")
-set(CMAKE_CXX_COMPILER "/usr/bin/g++-13")
+# for laptop
+#set(CMAKE_C_COMPILER "/usr/bin/gcc-13")
+#set(CMAKE_CXX_COMPILER "/usr/bin/g++-13")
 
 list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
 
@@ -66,7 +67,7 @@ include_directories(
 link_directories(${Boost_LIBRARY_DIRS})
 
 ### Make the executable #######################################################
-add_executable(btsniffer btsniffer.cpp lapnode.cpp)
+add_executable(btsniffer btsniffer.cpp lapnode.cpp udp.cpp)
 
 SET(CMAKE_BUILD_TYPE "Release")
 # adding some optimisation flags
