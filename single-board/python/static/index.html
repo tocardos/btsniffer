@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BT Piconet Radar</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <span class="title-main">PICONET RADAR</span>
+    <span class="title-sub">CFO fingerprinting &middot; RSSI-ranged</span>
+  </div>
+  <div class="status">
+    <span id="statusDot" class="status-dot offline"></span>
+    <span id="statusText">connecting&hellip;</span>
+  </div>
+</header>
+
+<main>
+  <section class="scope-wrap">
+    <canvas id="scope" width="900" height="900"></canvas>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-header">Tracked piconets</div>
+    <div id="lapList" class="lap-list">
+      <div class="empty-hint">Waiting for packets&hellip;</div>
+    </div>
+
+    <div class="panel-header legend-header">Legend</div>
+    <div class="legend">
+      <div class="legend-row"><span class="swatch master"></span> master</div>
+      <div class="legend-row"><span class="swatch slave"></span> slave</div>
+      <div class="legend-row"><span class="swatch unknown"></span> unknown role</div>
+      <div class="legend-row"><span class="swatch link"></span> active connection</div>
+      <div class="legend-row muted">center = strong signal, edge = weak</div>
+    </div>
+  </aside>
+</main>
+
+<script src="/static/radar.js"></script>
+</body>
+</html>

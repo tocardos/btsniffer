@@ -33,7 +33,7 @@
 #include <math.h>
 #include <unordered_map>
 #include "lapnode.hpp"
-#include "udp.h"
+#include "zmq_sender.hpp"
 #include <cstdint>
 #include <map>
 
@@ -546,7 +546,9 @@ bool extract_pdu_with_locked_uap(const uint8_t *binbuf,
     
     // If prediction failed, try nearby CLK values (±5 slots for drift/jitter)
     // Increased from ±2 to ±5 to handle more clock drift
-    for (int offset = -5; offset <= 5; offset++) {
+    //for (int offset = -5; offset <= 5; offset++) {
+    // vde check odd
+    for (int offset = -4; offset <= 4; offset += 2) {
         if (offset == 0) continue;  // Already tried
         uint32_t clk_try = (predicted_clk + offset + 64) % 64;
         
@@ -817,6 +819,122 @@ signal_metrics calculate_packet_metrics(const iqsamp_t *chan_samples, size_t buf
 
 
 
+// ---------------------------------------------------------------------------
+// NEW: CFO estimation via phase-derivative over the known access code +
+// sync word.
+//
+// The access word is fully known once a LAP has been confirmed via the CRC
+// check a few lines up (aw == awfinal), because awfinal deterministically
+// encodes the 64-bit sync word (the same value used to build `aw` from
+// barker/lap/code). For each of the known bits we know the expected GFSK
+// frequency-deviation sign (+1 for bit=1, -1 for bit=0). Averaging
+// (measured instantaneous frequency - expected deviation) over every
+// bit-slot in the access word cancels the data modulation and leaves the
+// CFO.
+//
+// TODO: CFO_SAMPLE_RATE_HZ must equal the *decimated channel* sample rate
+// in Hz (raw_srate / decfactor, from btsniffer.hpp -- which wasn't part of
+// what you gave me). Please confirm/adjust; everything else here is
+// independent of that constant.
+// ---------------------------------------------------------------------------
+#ifndef CFO_SAMPLE_RATE_HZ
+#define CFO_SAMPLE_RATE_HZ (2000000.0)  // TODO: set to raw_srate/decfactor
+#endif
+
+// Nominal GFSK peak frequency deviation for BR (spec calls for >=140 kHz
+// @ 1 Msym/s). Only used to weight known-bit polarity for the subtraction
+// below; a value that's somewhat off mainly costs precision, not bias,
+// since it's applied symmetrically to +1/-1 bits. Adjust if you have a
+// calibrated figure for your radio/front-end.
+#ifndef GFSK_DEVIATION_HZ
+#define GFSK_DEVIATION_HZ (160000.0)
+#endif
+
+// Rebuild the known access-code bits (4 preamble + 64 sync word = 68 bit
+// slots) from the verified access word, in the same bit-slot ordering
+// btsniffer.cpp already uses to assemble `aw` from barker/lap/code above.
+static void ac_known_bits(uint64_t awfinal, uint32_t lap, uint8_t known_bits[68])
+{
+    // Preamble (bit-slots 0-3): alternating 1010/0101, polarity set by the
+    // LAP's LSB -- mirrors the barker_true selection used above.
+    bool lap_lsb = (lap & 0x1) != 0;
+    known_bits[0] = lap_lsb ? 0 : 1;
+    known_bits[1] = lap_lsb ? 1 : 0;
+    known_bits[2] = lap_lsb ? 0 : 1;
+    known_bits[3] = lap_lsb ? 1 : 0;
+
+    // Sync word (bit-slots 4-67): awfinal bit i (0 = LSB) maps to bit-slot
+    // (67 - i), i.e. MSB-first, matching how `aw` was assembled from
+    // (barker << 58) | (lap << 34) | code.
+    for (int i = 0; i < 64; i++) {
+        known_bits[4 + i] = (uint8_t) ((awfinal >> (63 - i)) & 0x1);
+    }
+}
+
+// Phase-derivative CFO estimate (Hz) over the access-code span starting at
+// sample offset `access_code_start` in `chan`.
+double estimate_cfo_hz(const iqsamp_t *chan, size_t access_code_start,
+                        uint64_t awfinal, uint32_t lap)
+{
+    uint8_t known_bits[68];
+    ac_known_bits(awfinal, lap, known_bits);
+
+    double sum_freq_hz = 0.0;
+    int count = 0;
+
+    for (int b = 0; b < 68; b++) {
+        size_t center = access_code_start + (size_t)(b * srate);
+        if (center < 1) continue;
+
+        iqsamp_t x0 = chan[center - 1];
+        iqsamp_t x1 = chan[center];
+
+        // Instantaneous phase step between consecutive samples, via
+        // atan2 of the complex product x1 * conj(x0).
+        double re = (double) x1.real() * x0.real() + (double) x1.imag() * x0.imag();
+        double im = (double) x1.imag() * x0.real() - (double) x1.real() * x0.imag();
+        double inst_phase = std::atan2(im, re);
+
+        double inst_freq_hz = inst_phase * CFO_SAMPLE_RATE_HZ / (2.0 * M_PI);
+        double expected_dev_hz = (known_bits[b] ? +1.0 : -1.0) * GFSK_DEVIATION_HZ;
+
+        sum_freq_hz += (inst_freq_hz - expected_dev_hz);
+        count++;
+    }
+
+    return (count > 0) ? (sum_freq_hz / count) : 0.0;
+}
+
+// NEW: telemetry wrapper. Pulls the current role/RSSI/SNR/CFO for `lap`
+// out of lap_map (populated a few lines up in the main loop via
+// lap_node::role_from_clk() + update_signal_metrics()) and publishes over
+// ZMQ. Signature-compatible drop-in for the old udp_send_lap_uap_pdu()
+// call sites (minus the rssi argument, which is now looked up internally).
+
+std::unordered_map<uint32_t, lap_node> lap_map;
+
+
+static void send_telemetry(uint32_t lap, uint8_t uap, int ch, int pkt_flag,
+                            size_t pdu_len, const uint8_t *pdu)
+{
+    auto it = lap_map.find(lap);
+    if (it == lap_map.end()) {
+        zmq_send_lap_uap_pdu(lap, uap, ch, pkt_flag, ROLE_UNKNOWN,
+                              -120.0, 0.0, 0.0, 0.0, pdu, pdu_len);
+        return;
+    }
+
+    lap_node &node = it->second;
+    bt_role_t role = node.last_role;
+    double rssi = node.last_rssi;
+    double snr  = node.last_snr;
+    double cfo  = (role == ROLE_MASTER) ? node.last_cfo_master :
+                  (role == ROLE_SLAVE)  ? node.last_cfo_slave  : 0.0;
+
+    zmq_send_lap_uap_pdu(lap, uap, ch, pkt_flag, (int) role,
+                          rssi, snr, cfo, node.cfo_diff_hz, pdu, pdu_len);
+}
+
 /*=========================================================================*/
 inline bool is_valid_preamble(uint8_t *binbuf, unsigned int k)
 {
@@ -880,7 +998,6 @@ int length (uint64_t word)
   return (_length (word, 64, 0));
 }
 
-std::unordered_map<uint32_t, lap_node> lap_map;
 
 uint64_t compute_remainder (uint64_t input, uint64_t divisor)
 {
@@ -1146,29 +1263,54 @@ void* proc_routine(void *routine_params)
 			    uint64_t awfinal = stilde ^ p;
 			    
 			    uint32_t _lap = (uint32_t) lap;
+            
+                uint64_t ble_access_code = 0x8E89BED6;
+                uint64_t extracted_code = 
+                        ((uint64_t) extract_byte(binbuf, i +  4*srate) <<  0) |
+                        ((uint64_t) extract_byte(binbuf, i + 12*srate) <<  8) |
+                        ((uint64_t) extract_byte(binbuf, i + 20*srate) << 16) |
+                        ((uint64_t) extract_byte(binbuf, i + 28*srate) << 24);
+
+                if (extracted_code == ble_access_code) {
+                    std::cout << boost::format("[%2d]--BLE packet detected! (not supported) -- ")
+                        % ch  << std::endl;
+                    //std::cout << "BLE packet detected! (not supported)" << std::endl;
+                    continue;
+                }
+            
+                // Role (master/slave) is NOT determined here. It requires a
+            // HEC-validated CLK, which the state machine below may or may not
+            // resolve for this packet -- role is derived from clk parity at
+            // each point in the switch() below where a CLK is actually
+            // confirmed (see lap_node::role_from_clk). `telemetry_recorded`
+            // tracks whether one of those branches already logged this
+            // packet; if none did, the fallback right after the switch()
+            // records it with ROLE_UNKNOWN rather than dropping it silently.
+            bool telemetry_recorded = false;
+
+            double pkt_cfo_hz = 0.0;  // CFO estimate for this packet, if available
+            signal_metrics metrics;  // Signal metrics for this packet, if available
+            
+
+
 			    if (aw == awfinal) {
 				    if (lap_map.find(_lap) == lap_map.end()) {
 					    lap_map[_lap] = lap_node(_lap);
 				    }
-            uint64_t ble_access_code = 0x8E89BED6;
-uint64_t extracted_code = 
-    ((uint64_t) extract_byte(binbuf, i +  4*srate) <<  0) |
-    ((uint64_t) extract_byte(binbuf, i + 12*srate) <<  8) |
-    ((uint64_t) extract_byte(binbuf, i + 20*srate) << 16) |
-    ((uint64_t) extract_byte(binbuf, i + 28*srate) << 24);
 
-if (extracted_code == ble_access_code) {
-    std::cout << "BLE packet detected! (not supported)" << std::endl;
-    continue;
-}
             // Calculate signal metrics for this packet
-            signal_metrics metrics = calculate_packet_metrics(chan, bufsize, i, srate);
-    
-            // Store in lap_node (add these fields to lap_node structure)
-            lap_map[_lap].last_rssi = metrics.rssi_dbm;
-            lap_map[_lap].last_snr = metrics.snr_db;
-            lap_map[_lap].avg_rssi = (lap_map[_lap].avg_rssi * 0.8) + (metrics.rssi_dbm * 0.2); // EMA
-            lap_map[_lap].avg_snr = (lap_map[_lap].avg_snr * 0.8) + (metrics.snr_db * 0.2);     // EMA
+            //signal_metrics metrics = calculate_packet_metrics(chan, bufsize, i, srate);
+            metrics = calculate_packet_metrics(chan, bufsize, i, srate);
+
+            // --- NEW: CFO -----------------------------------------------------------
+            // CFO only needs the access code itself (known once aw==awfinal passed),
+            // not a resolved CLK, so it's safe to compute here for every packet.
+            //double pkt_cfo_hz = estimate_cfo_hz(chan, i, awfinal, _lap);
+            pkt_cfo_hz = estimate_cfo_hz(chan, i, awfinal, _lap);
+
+
+            
+            // --------------------------------------------------------------------------
 			    } else {
 				    continue;
 			    }
@@ -1196,6 +1338,7 @@ if (extracted_code == ble_access_code) {
           size_t pdu_len;
 			    long long timenow_sec_us = (samples_processed + i)/srate;
 
+                
 			    
 			    if (stopsig == false) {
 				    //std::cout << boost::format("[%2d] %12lld us -- %06X -- ")
@@ -1237,7 +1380,7 @@ if (extracted_code == ble_access_code) {
 					    if (valid_uaps != 32) {
 						    std::cout << boost::format("Init failed") << std::endl;
 						    lap_map[_lap].bf_cannot_init();
-                             udp_send_lap_uap_pdu(lap,0xFF,lap_map[_lap].avg_rssi,ch,0,0,0);
+                             send_telemetry(lap, 0xFF, ch, 0,0,0);
 					    } else {
 						    std::cout << boost::format("Initialized") << std::endl;
                 
@@ -1300,7 +1443,7 @@ if (extracted_code == ble_access_code) {
 						    if (error > ERROR_THRESHOLD) {
 							    std::cerr << boost::format("Error too big (%f), LAP removed") % error
 							              << std::endl;
-                                 udp_send_lap_uap_pdu(lap,0xFF,lap_map[_lap].avg_rssi,ch,0,0,0);
+                                 send_telemetry(lap, 0xFF, ch, 0,0,0);
 							    lap_map.erase(_lap);
 							    continue;
 						    }
@@ -1365,11 +1508,11 @@ if (extracted_code == ble_access_code) {
 						    if (count_valid_uap == 0 && count_broken_uap > 0) {
 							    lap_map[_lap].count_broken_uap ();
 							    std::cerr << "Frame likely broken, skipped" << std::endl;
-                                udp_send_lap_uap_pdu(lap,0xFF,lap_map[_lap].avg_rssi,ch,0,0,0);
+                                send_telemetry(lap, 0xFF, ch, 0,0,0);
 							    continue;
 						    } else if (count_valid_uap == 0) {
 							    std::cout << "No valid UAP remaining, LAP removed" << std::endl;
-                                udp_send_lap_uap_pdu(lap,0xFF,lap_map[_lap].avg_rssi,ch,0,0,0);
+                                send_telemetry(lap, 0xFF, ch, 0,0,0);
 							    lap_map.erase(_lap);
 							    continue;
 						    } else if (count_valid_uap <= 2) {
@@ -1390,7 +1533,7 @@ if (extracted_code == ble_access_code) {
 									    uap_found[uap_idx++] = uap;
 								    }
 							    }
-							    udp_send_lap_uap_pdu(lap,0xFF,lap_map[_lap].avg_rssi,ch,0,0,0);
+							    send_telemetry(lap, 0xFF, ch, 0,0,0);
 							    std::cout << boost::format("Only two UAP left (%X and %X) - ")
 								    % uap_found[0] % uap_found[1];
 							    if (!lap_map[_lap].two_uap_stage && uap_idx == 2) {
@@ -1483,10 +1626,29 @@ if (extracted_code == ble_access_code) {
                 
                 // UAP locked! Transition to tracking state
                 lap_map[_lap].set_status(LAP_STATE_UAP_LOCKED);
-                
+
+                // NEW: role from clk parity, cross-checked against packet
+                // type/LT_ADDR. Broadcast (LT_ADDR==0) and POLL (type==0x1)
+                // packets can only ever come from the master, so seeing one
+                // lets us confirm (or correct) which clk parity means
+                // "master" for this LAP, instead of just assuming CLK1=0.
+                {
+                    const uint8_t *header_start = binbuf + i + 72 * srate;
+                    uint32_t header = dewhiten_header_with_clk(header_start, try_clk);
+                    uint8_t lt_addr = header & 0x7;
+                    uint8_t ptype = (header >> 3) & 0xF;
+                    if (lt_addr == 0 || ptype == 0x1) {
+                        lap_map[_lap].confirm_master_parity(try_clk);
+                    }
+                }
+                bt_role_t pkt_role = lap_map[_lap].role_from_clk(try_clk);
+                lap_map[_lap].update_signal_metrics(pkt_role, metrics.rssi_dbm,
+                                                     metrics.snr_db, pkt_cfo_hz);
+                telemetry_recorded = true;
+
                 // Export the first PDU
                 //udp_send_lap_uap_pdu(_lap, lap_map[_lap].locked_uap, pdu, pdu_len);
-                udp_send_lap_uap_pdu(lap,lap_map[_lap].locked_uap,lap_map[_lap].avg_rssi,ch,0,pdu_len,pdu);
+                send_telemetry(lap, lap_map[_lap].locked_uap, ch, 0,pdu_len,pdu);
 
                 // Update timestamp
                 lap_map[_lap].set_ts(timenow_sec_us);
@@ -1561,16 +1723,36 @@ if (extracted_code == ble_access_code) {
                                        pdu, &pdu_len, bufsize)) {
                         std::cout << "✓ PDU extracted" << std::endl;
                         lap_map[_lap].pdu_ok++;
+
+                        // NEW: role from clk parity (extract_pdu_with_locked_uap
+                        // already updated last_clk to whichever CLK it resolved
+                        // this packet with), cross-checked against packet
+                        // type/LT_ADDR the same way as the brute-force path.
+                        {
+                            uint32_t resolved_clk = lap_map[_lap].last_clk;
+                            const uint8_t *header_start = binbuf + i + 72 * srate;
+                            uint32_t header = dewhiten_header_with_clk(header_start, resolved_clk);
+                            uint8_t lt_addr = header & 0x7;
+                            uint8_t ptype = (header >> 3) & 0xF;
+                            if (lt_addr == 0 || ptype == 0x1) {
+                                lap_map[_lap].confirm_master_parity(resolved_clk);
+                            }
+                            bt_role_t pkt_role = lap_map[_lap].role_from_clk(resolved_clk);
+                            lap_map[_lap].update_signal_metrics(pkt_role, metrics.rssi_dbm,
+                                                                 metrics.snr_db, pkt_cfo_hz);
+                            telemetry_recorded = true;
+                        }
+
                         //udp_send_lap_uap_pdu(_lap, lap_map[_lap].locked_uap, pdu, pdu_len);
-                        udp_send_lap_uap_pdu(lap,lap_map[_lap].locked_uap,lap_map[_lap].avg_rssi,ch,2,pdu_len,pdu);
+                        send_telemetry(lap, lap_map[_lap].locked_uap, ch, 2,pdu_len,pdu);
                     } else {
                         std::cout << "✗ PDU extraction failed" << std::endl;
                         lap_map[_lap].pdu_fail++;
-                        udp_send_lap_uap_pdu(lap,lap_map[_lap].locked_uap,lap_map[_lap].avg_rssi,ch,2,0,0);
+                        send_telemetry(lap, lap_map[_lap].locked_uap, ch, 2,0,0);
                     }
                 } else {
                     std::cout << "✗ extract_header_bf failed" << std::endl;
-                    udp_send_lap_uap_pdu(lap,lap_map[_lap].locked_uap,lap_map[_lap].avg_rssi,ch,2,0,0);
+                    send_telemetry(lap, lap_map[_lap].locked_uap, ch, 2,0,0);
                     lap_map[_lap].pdu_fail++;
                 }
             }
@@ -1581,6 +1763,15 @@ if (extracted_code == ble_access_code) {
 				    break;
 			    }
 			    
+
+            // NEW: if none of the branches above resolved a CLK for this
+            // packet (brute-force miss, prediction miss, LAP_STATE_NEW,
+            // etc.), still record it -- with ROLE_UNKNOWN -- so it isn't
+            // silently dropped from the telemetry/radar view.
+            if (!telemetry_recorded) {
+                lap_map[_lap].update_signal_metrics(ROLE_UNKNOWN, metrics.rssi_dbm,
+                                                     metrics.snr_db, pkt_cfo_hz);
+            }
 			    i += 100;
 		    }
 	    }
@@ -1709,7 +1900,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
   uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
   // Allocate data buffers.
-  const double nseconds = 0.2;
+  const double nseconds = 0.1;
   const double bufsize_us = nseconds * rate;
   const size_t usrp_bufsize = rx_stream->get_max_num_samps();
   const size_t usrp_nbuffers = (size_t) ceil(bufsize_us / (float) usrp_bufsize);
@@ -1758,7 +1949,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
 
   std::signal(SIGINT, &sigint_handler);
   // setup udp streaming
-  udp_init("0.0.0.0", 9000);
+  zmq_sender_init("0.0.0.0", 9000);
   std::cout << boost::format("\n buffer size %d samples.") % usrp_nbuffers;
         std::cout << std::endl;
   // Start streaming.
@@ -1812,7 +2003,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[])
   
   pthread_spin_destroy(&lock[0]);
   pthread_spin_destroy(&lock[1]);
-  udp_close();
+  zmq_sender_close();
   std::cout << "Done." << std::endl;
 
   return 0;

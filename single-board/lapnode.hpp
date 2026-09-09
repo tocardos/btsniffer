@@ -33,6 +33,25 @@ typedef enum {
 	LAP_STATE_UAP_LOCKED = 4,
 } lap_status_t;
 
+// NEW: which side of the piconet a given packet came from. Derived from
+// cumulative 625us-slot parity (see lap_node::update_role in lapnode.cpp),
+// NOT from the parity of the 6-bit `clk` extracted via header dewhitening --
+// that value is CLK[6:1] and is identical for a master packet and the
+// slave's reply within the same slot pair, so it can't distinguish them.
+typedef enum {
+	ROLE_UNKNOWN = 0,
+	ROLE_MASTER  = 1,
+	ROLE_SLAVE   = 2
+} bt_role_t;
+
+typedef struct {
+	bool     uap_valid;
+	uint32_t uap;
+	uint32_t clk1;
+	uint32_t clk2;
+	int      clk_index;
+} uap_slot_t;
+
 
 class lap_node
 {
@@ -81,7 +100,68 @@ public:
     double last_snr = 0.0f;
     double avg_rssi = 0.0f;
     double avg_snr = 0.0f;
+	// NEW: role determination from slot-pair parity. Call once per confirmed
+	// packet, BEFORE the caller's own set_ts() updates `ts` for this packet
+	// (update_role reads the *previous* ts to compute the elapsed slot
+	// count). Also stores the result in last_role.
+	bt_role_t update_role(long long ts_now_us);
+	void update_role_from_header(uint8_t packet_type, uint8_t lt_addr, uint32_t clk);
+	// NEW: role determination from clk parity. Unlike an earlier version of
+	// this, this does NOT track cumulative timing -- it reads the role
+	// directly off whichever `clk` value the state machine already resolved
+	// for this specific packet (btsniffer.cpp already recomputes CLK[1:6]
+	// from scratch, via HEC-validated brute force or HEC-validated
+	// prediction, for every single packet -- there's no need to track
+	// anything across packets, and doing so was the bug: any dropped
+	// packet desynced a running counter and silently flipped every
+	// subsequent role assignment until the next desync corrected it back).
+	//
+	// btsniffer.cpp's own clk-prediction arithmetic (slots_elapsed =
+	// round(time_diff/625.0); predicted_clk = last_clk + slots_elapsed)
+	// proves their `clk` increments by 1 per 625us slot, not per 1.25ms
+	// slot-pair -- so its LSB *is* CLK1, the exact bit BR/EDR uses to
+	// alternate master (CLK1=0) and slave (CLK1=1) transmission slots.
+	bt_role_t role_from_clk(uint32_t clk);
 
+	// Which clk-parity value corresponds to "master" for this LAP. Defaults
+	// to 0 (CLK1=0 => master, per spec) but gets corrected on the fly the
+	// first time we see a packet that can only have come from the master
+	// (broadcast LT_ADDR==0, or a POLL packet) -- see confirm_master_parity.
+	// This is the "check the header for packet type" cross-check.
+	void confirm_master_parity(uint32_t clk);
+
+	
+	                           
+	// NEW: record RSSI/SNR/CFO for a packet of a given role. Updates both
+	// the role-specific last/average fields and the pre-existing
+	// role-agnostic last_rssi/last_snr/avg_rssi/avg_snr fields (kept for
+	// backward compatibility with anything that already reads those).
+	void update_signal_metrics(bt_role_t role, double rssi_dbm,
+	                            double snr_db, double cfo_hz);
+	
+	// --- NEW: slot-parity role tracking ------------------------------------
+	// --- NEW: clk-parity role determination --------------------------------
+	int master_clk_parity;   // 0 or 1: clk&1 value that means "master" for this LAP
+	bool parity_confirmed;   // whether an anchor packet (broadcast/POLL) set this,
+	                          // vs. it still being the untested spec-default (0)
+	
+	uint64_t slot_counter;    // cumulative 625us slots since first packet
+	bool     slot_ref_set;    // whether slot_counter has a valid reference
+	bt_role_t last_role;      // role of the most recently processed packet
+
+	// --- NEW: per-role RSSI / SNR / CFO (last value + EMA average) --------
+	double last_rssi_master, last_rssi_slave;
+	double avg_rssi_master,  avg_rssi_slave;
+	double last_snr_master,  last_snr_slave;
+	double avg_snr_master,   avg_snr_slave;
+	double last_cfo_master,  last_cfo_slave;   // Hz
+	double avg_cfo_master,   avg_cfo_slave;    // Hz
+	bool   has_master_sample, has_slave_sample;
+
+	// Fingerprint signal: difference between master and slave average CFO.
+	// Only meaningful once has_master_sample && has_slave_sample are both
+	// true; 0.0 until then.
+	double cfo_diff_hz;
 	// ========================
 private:
 	lap_status_t state;

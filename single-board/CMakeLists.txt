@@ -35,6 +35,12 @@ list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
 # probably need some special care!)
 # Set this to ON in order to link a static build of UHD:
 option(UHD_USE_STATIC_LIBS OFF)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(ZeroMQ QUIET libzmq)
+endif()
+message(STATUS "ZeroMQ include dirs: ${ZeroMQ_INCLUDE_DIRS}")
+message(STATUS "ZeroMQ libraries:    ${ZeroMQ_LIBRARIES}")
 
 # This example also requires Boost:
 set(BOOST_REQUIRED_COMPONENTS
@@ -63,11 +69,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include_directories(
     ${Boost_INCLUDE_DIRS}
     ${UHD_INCLUDE_DIRS}
+    ${ZeroMQ_INCLUDE_DIRS}
 )
 link_directories(${Boost_LIBRARY_DIRS})
+if(ZeroMQ_LIBRARY_DIRS)
+    link_directories(${ZeroMQ_LIBRARY_DIRS})
+endif()
 
 ### Make the executable #######################################################
-add_executable(btsniffer btsniffer.cpp lapnode.cpp udp.cpp)
+add_executable(btsniffer btsniffer.cpp lapnode.cpp zmq_sender.cpp)
 
 SET(CMAKE_BUILD_TYPE "Release")
 # adding some optimisation flags
@@ -77,13 +87,14 @@ set(CMAKE_CXX_FLAGS_RELEASE
 # anything else we need (in this case, some Boost libraries):
 if(NOT UHD_USE_STATIC_LIBS)
     message(STATUS "Linking against shared UHD library.")
-    target_link_libraries(btsniffer ${UHD_LIBRARIES} ${Boost_LIBRARIES})
+    target_link_libraries(btsniffer ${UHD_LIBRARIES} ${Boost_LIBRARIES} ${ZeroMQ_LIBRARIES})
 # Static library case: 
 else(NOT UHD_USE_STATIC_LIBS)
     message(STATUS "Linking against static UHD library.")
     target_link_libraries(btsniffer
         ${UHD_STATIC_LIB_LINK_FLAG}
         ${UHD_STATIC_LIB_DEPS}
+        ${ZeroMQ_LIBRARIES}
     )
 endif(NOT UHD_USE_STATIC_LIBS)
 
